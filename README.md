@@ -1,16 +1,19 @@
-# 画像投稿機能付きWeb掲示板システム 構築手順書
+# 📌 画像投稿機能付きWeb掲示板システム 構築手順書
 
-本手順書は、初期状態の Amazon Linux（AWS EC2）環境において、CLI操作のみでWeb掲示板を構築・稼働させるための手順書です。
+> **【概要】**  
+> 本手順書は、初期状態の **Amazon Linux (AWS EC2)** 環境において、CLI操作のみでWeb掲示板サービスを再現・構築・稼働させるための完全手順書です。
 
 ---
 
-## 1. システム構成とディレクトリ構造
+## 1. 📂 システム構成とディレクトリ構造
 
-本システムは Docker Compose を使用して以下の3つのコンテナで構成されます。
+本システムは **Docker Compose** を使用し、以下の**3つのコンテナ**を連携させて動作します。
 
-* **web**: Nginx（Webサーバー）
-* **php**: PHP-FPM（アプリケーション実行環境）
-* **mysql**: MySQL（データベース）
+* **`web`** : **Nginx**（Webサーバー）
+* **`php`** : **PHP-FPM**（アプリケーション実行環境）
+* **`mysql`** : **MySQL**（データベース）
+
+### **【プロジェクトのファイル構成】**
 
 suiyou3.4gen.kadai/
 ├── compose.yml              # コンテナ構成ファイル
@@ -21,20 +24,21 @@ suiyou3.4gen.kadai/
 │   └── conf.d/
 │       └── default.conf     # Nginx設定ファイル
 ├── public/
-│   └── bbsimagetest.php     # 掲示板プログラム
+│   └── bbsimagetest.php     # 掲示板プログラム本体
 └── upload/
-└── image/               # 画像保存ディレクトリ
+└── image/               # 画像保存用ディレクトリ
 
 
 ---
 
-## 2. 環境構築手順
+## 2. 🛠️ 環境構築手順
 
-初期状態の EC2 にログインした直後の状態から、以下のコマンドを順番に実行してください。
+> ⚠️ **前提条件**：初期状態の EC2 にSSH接続した直後の状態（ホームディレクトリ）から、順番に実行してください。
 
-### ステップ1: パッケージのインストールと初期設定
+### 🔹 **ステップ1: パッケージのインストールと権限設定**
 
-システムの更新、Docker・Gitのインストール、および権限設定を行います。
+**【操作内容】**  
+システムの更新、**Docker** および **Git** のインストールを行い、`ec2-user` でDockerを動かせるように権限を付与します。
 
 ```bash
 sudo dnf update -y
@@ -42,50 +46,69 @@ sudo dnf install -y docker git
 sudo systemctl start docker
 sudo systemctl enable docker
 sudo usermod -aG docker ec2-user
-グループ変更を現在のセッションに反映させます。
+【操作内容】
+
+設定したグループ権限を現在のターミナルセッションに即時反映させます。
 
 Bash
 newgrp docker
-docker compose プラグインをインストールします。
+【操作内容】
+
+複数コンテナを一括管理するための docker compose プラグイン をインストールします。
 
 Bash
 sudo mkdir -p /usr/libexec/docker/cli-plugins
-sudo curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/libexec/docker/cli-plugins/docker-compose
+sudo curl -SL [https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64](https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64) -o /usr/libexec/docker/cli-plugins/docker-compose
 sudo chmod +x /usr/libexec/docker/cli-plugins/docker-compose
-ステップ2: リポジトリのクローン
-ソースコードをサーバーにダウンロードし、ディレクトリへ移動します。
+🔹 ステップ2: リポジトリのクローン（ファイルの配置）
+【操作内容】
+
+GitHubからソースコード一式をサーバーへダウンロードし、作業ディレクトリへ移動します。
 
 Bash
-git clone https://github.com/eita0313/suiyou3.4gen.kadai.git
+git clone [https://github.com/eita0313/suiyou3.4gen.kadai.git](https://github.com/eita0313/suiyou3.4gen.kadai.git)
 cd suiyou3.4gen.kadai
-ステップ3: 画像保存用ディレクトリの作成
-画像を保存するためのディレクトリを作成し、書き込み権限を付与します。
+🔹 ステップ3: 画像保存用ディレクトリの準備
+【操作内容】
+
+投稿された画像ファイルを保持するためのディレクトリを作成し、コンテナ側からの書き込み権限（777）を付与します。
 
 Bash
 mkdir -p upload/image
 chmod -R 777 upload/
-ステップ4: Dockerコンテナの起動
-コンテナ群をビルドし、バックグラウンドで起動します。
+🔹 ステップ4: Dockerコンテナのビルドと起動
+【操作内容】
+
+構成ファイル（compose.yml）を元に、コンテナ群をバックグラウンドで一括起動します。
 
 Bash
 docker compose up -d --build
-コンテナの起動状態を確認します（すべて Up または Running になればOK）。
+【確認】
+
+以下のコマンドを実行し、3つのコンテナ（web, php, mysql）がすべて Up または Running になっていることを確認します。
 
 Bash
 docker compose ps
-ステップ5: データベースの初期設定
-MySQLの起動完了まで 10秒ほど待機 した後、初期化SQLを実行してテーブルを作成します。
+🔹 ステップ5: データベースの初期化（テーブル作成）
+⏳ 注意：MySQLコンテナが完全に立ち上がるまで 10秒ほど待ってから 実行してください。
+
+【操作内容】
+
+同梱の init.sql を実行し、掲示板データ保存用の bbs_entries テーブル を作成します。
 
 Bash
 docker compose exec -T mysql mysql -u root example_db < init.sql
-テーブルが作成されたか確認します。
+【確認】
+
+テーブルが正しく作成されたか確認します（bbs_entries と表示されれば成功です）。
 
 Bash
 docker compose exec -T mysql mysql -u root example_db -e "SHOW TABLES;"
-ステップ6: コンテナ内の書き込み権限設定
-PHPコンテナ側から画像を正常に保存できるよう、最終的なアクセス権限を設定します。
+🔹 ステップ6: コンテナ内のアクセス権限の最終調整
+【操作内容】
+
+PHPコンテナ内の実行ユーザー（www-data）がアップロード領域に確実にファイルを書き込めるよう、コンテナ内部の所有権と権限を確定させます。
 
 Bash
 docker compose exec php chmod -R 777 /var/www/upload
 docker compose exec php chown -R www-data:www-data /var/www/upload
-構築作業は以上で完了です。
