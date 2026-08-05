@@ -1,86 +1,115 @@
-# 画像投稿機能付き掲示板サービス 構築手順書
+# 画像投稿機能付きWeb掲示板システム 構築手順書
 
-本手順書は、初期状態の Amazon Linux サーバー（AWS EC2インスタンス）を想定し、CLI上のコマンド操作のみでWeb掲示板システムをゼロから構築・起動するための完全な手順です。
+本手順書は、初期状態の Amazon Linux（AWS EC2インスタンス）環境において、CLI操作のみでDockerコンテナ群を用いた画像投稿機能付きWeb掲示板を再現・構築し、正常にサービスを稼働させるための完全な手順書です。
 
-## 1. 前提条件とディレクトリ構造
+---
 
-本システムは Docker および Docker Compose を使用して構築します。
-Gitからリポジトリをクローンした後のファイル構成は以下の状態になることを想定しています。
+## 1. システム構成とディレクトリ構造
+
+本システムは、保守性およびポータビリティを高めるため、Docker Composeを用いて以下の3つのコンテナを連動させて稼働します。
+
+* **Webコンテナ (`web`)**: Nginx (Webサーバー)  
+  HTTPリクエストを受け持ち、PHPファイルへのアクセスを `php` コンテナへルーティングします。また、アップロードされた画像ファイルへの静的アクセスを処理します。
+* **Appコンテナ (`php`)**: PHP-FPM (アプリケーションサーバー)  
+  掲示板の本体ロジック (`bbsimagetest.php`) を実行します。DB操作、画像の検証および保存処理を担います。
+* **DBコンテナ (`mysql`)**: MySQL (データベース)  
+  投稿テキスト、投稿日時、画像ファイル名などのデータを保存・管理します。
+
+### リポジトリ構成と各ファイルの役割
 
 ```text
 suiyou3.4gen.kadai/
-├── compose.yml
-├── Dockerfile
-├── README.md
-├── init.sql
+├── compose.yml              # 3つのコンテナ(Web, PHP, DB)の構成・ポート・ボリュームを定義する設定ファイル
+├── Dockerfile               # PHPコンテナをビルドするためのファイル(PDO等の拡張機能を有効化)
+├── init.sql                 # MySQLコンテナ起動時にデータベースとテーブルを初期化するSQLスクリプト
+├── README.md                # 本手順書
 ├── nginx/
 │   └── conf.d/
-│       └── default.conf
+│       └── default.conf     # NginxのリバースプロキシおよびPHP連携・静的ファイル配信設定
 ├── public/
-│   └── bbsimagetest.php
+│   └── bbsimagetest.php     # 掲示板のフロントエンド(HTML/JS)およびバックエンド(PHP)ロジック
 └── upload/
-    └── image/  (※構築手順内で作成します)
-2. 環境構築手順
-サーバーにSSH接続した直後の状態（ホームディレクトリ）から、以下のコマンドを上から順に実行してください。
+    └── image/               # 投稿された画像が保存されるディレクトリ(ホスト・コンテナ間で共有)
+2. 環境構築手順 (ステップ・バイ・ステップ)
+初期状態の Amazon Linux（EC2）にログインした状態から、以下の手順を順番に実行してください。
 
-ステップ1: パッケージの更新と必須ツールのインストール
-まずはシステムを最新状態にし、構築に必要な docker と git をインストールします。
+ステップ1: ホストOSの準備と必要パッケージのインストール
+システムを最新化し、コンテナ環境に必要な docker とソースコード取得に必要な git をインストールします。
 
 Bash
-# パッケージのアップデート
+# パッケージインデックスの更新
 sudo dnf update -y
 
-# Docker と Git のインストール
+# Docker および Git のインストール
 sudo dnf install -y docker git
 
-# Dockerサービスの起動と、OS再起動時の自動起動設定
+# Docker サービスの起動および OS 起動時の自動開始設定
 sudo systemctl start docker
 sudo systemctl enable docker
 
-# 現在のユーザー(ec2-user)をdockerグループに追加し、sudoなしでDockerを操作できるようにする
-sudo usermod -aG docker ec2-user
-Docker Compose（V2）プラグインを手動でダウンロードしてインストールします。
-
-Bash
-sudo mkdir -p /usr/libexec/docker/cli-plugins
-sudo curl -SL [https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64](https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64) -o /usr/libexec/docker/cli-plugins/docker-compose
-sudo chmod +x /usr/libexec/docker/cli-plugins/docker-compose
-【重要】 グループ追加の設定を現在のセッションに反映させるため、以下のコマンドを実行します。
+# ec2-user に Docker の実行権限を付与 (sudo無しの操作を許可)
+sudo usermod aG docker ec2-user
+権限変更を再ログインすることなく現在のターミナルセッションに反映させます。
 
 Bash
 newgrp docker
-ステップ2: ソースコードの取得（クローン）
-GitHubから本プロジェクトのファイルをダウンロードし、作業ディレクトリに移動します。
-※環境依存のエラーを防ぐため、HTTPS経由でクローンします。
+次に、複数コンテナを一括管理するための docker compose プラグインをインストールします。
 
 Bash
+# プラグインディレクトリの作成
+sudo mkdir -p /usr/libexec/docker/cli-plugins
+
+# 最新の Docker Compose バイナリのダウンロード
+sudo curl -SL [https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64](https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64) -o /usr/libexec/docker/cli-plugins/docker-compose
+
+# 実行権限の付与
+sudo chmod +x /usr/libexec/docker/cli-plugins/docker-compose
+ステップ2: ソースコードの取得（リポジトリのクローン）
+GitHub上のパブリックリポジトリから、構成ファイル一式をサーバーローカルへ設置します。
+
+Bash
+# リポジトリのクローン (HTTPS経由)
 git clone [https://github.com/eita0313/suiyou3.4gen.kadai.git](https://github.com/eita0313/suiyou3.4gen.kadai.git)
+
+# 作成されたプロジェクトディレクトリへ移動
 cd suiyou3.4gen.kadai
-ステップ3: 画像保存用ディレクトリの作成
-リポジトリには空のディレクトリが含まれない場合があるため、画像を保存するための upload/image/ ディレクトリを手動で作成し、書き込み権限を付与します。
+ステップ3: 画像永続化用ディレクトリの作成と権限付与
+投稿された画像をコンテナの停止・削除後も保持（永続化）させるため、ホスト側に保存先ディレクトリを作成し、コンテナ内から書き込みができるよう権限を開放します。
 
 Bash
+# 保存先ディレクトリの作成
 mkdir -p upload/image
+
+# 全ユーザーに対する書き込み権限の付与
 chmod -R 777 upload/
-ステップ4: Dockerコンテナのビルドと起動
-用意された compose.yml と Dockerfile を元に、Nginx(Webサーバー)、PHP(アプリケーション)、MySQL(データベース)の3つのコンテナを構築し、バックグラウンドで起動します。
+ステップ4: Dockerコンテナのビルドおよび起動
+compose.yml の定義に従い、Web、PHP、MySQLの各イメージをビルドし、バックグラウンドで起動します。
 
 Bash
 docker compose up -d --build
-起動後、以下のコマンドですべてのコンテナ（web, php, mysql）のステータスが Up または Running になっていることを確認してください。
+起動確認を行います。
 
 Bash
 docker compose ps
-ステップ5: データベースのテーブル作成 (初期化)
-MySQLコンテナが完全に起動するまで約10〜15秒ほど待機した後、リポジトリ内の init.sql を使ってデータベース内に掲示板用のテーブル（bbs_entries）を作成します。
+web (Nginx)、php (PHP-FPM)、mysql (MySQL) の3つのコンテナ状態がすべて Up または Running になっていることを確認してください。
+
+ステップ5: データベースの初期設定 (テーブル構築)
+MySQLコンテナが内部の初期化処理を完了するまで 10〜15秒程度待機 した後、同梱の init.sql を実行して bbs_entries テーブルを作成します。
 
 Bash
-# データベースの初期化用SQLをMySQLコンテナに流し込む
+# MySQLコンテナに対し init.sql を流し込み、テーブル構造を構築
 docker compose exec -T mysql mysql -u root example_db < init.sql
-ステップ6: アップロードディレクトリのパーミッション最終調整
-Dockerのボリュームマウントが完了した後、コンテナ内部のPHPプロセス（www-dataユーザー）が、ホスト側のディレクトリへ確実に画像を書き込めるよう所有権と権限を調整します。
+テーブルが作成されていることを確認します。
 
 Bash
+docker compose exec -T mysql mysql -u root example_db -e "SHOW TABLES;"
+出力結果に bbs_entries が表示されていれば正常です。
+
+ステップ6: コンテナ内パーミッションの確定調整
+Dockerボリュームマウントが適用された後、PHPコンテナ内の実行ユーザー (www-data) がアップロードディレクトリへ確実に書き込みを行えるよう、コンテナ内部から最終的なアクセス権限を設定します。
+
+Bash
+# コンテナ内部の /var/www/upload に対する所有権とパーミッション設定
 docker compose exec php chmod -R 777 /var/www/upload
 docker compose exec php chown -R www-data:www-data /var/www/upload
-構築作業は以上で完了です。
+以上ですべての構築作業が完了です。
