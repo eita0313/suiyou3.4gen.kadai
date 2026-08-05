@@ -73,7 +73,7 @@ sudo chmod +x /usr/libexec/docker/cli-plugins/docker-compose
 GitHubからソースコード一式をサーバーへダウンロードし、作業ディレクトリへ移動します。
 
 ```bash
-git clone [https://github.com/eita0313/suiyou3.4gen.kadai.git](https://github.com/eita0313/suiyou3.4gen.kadai.git)
+git clone https://github.com/eita0313/suiyou3.4gen.kadai.git　https://github.com/eita0313/suiyou3.4gen.kadai.git
 cd suiyou3.4gen.kadai
 ```
 
